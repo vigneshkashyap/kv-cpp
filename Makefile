@@ -2,7 +2,7 @@
     CXXFLAGS ?= -std=c++17 -O2 -Wall -Wextra -pedantic
     INC := -Iinclude
     SRC := src/engine.cpp src/repl.cpp
-    BIN := kvx
+    BIN := kv
 
     all: $(BIN)
 

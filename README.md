@@ -1,4 +1,4 @@
-# kvx-mini (Stage 2)
+# KV-Mini
 Minimal C++17 key-value store with:
 - Write-Ahead Log (WAL)
 - Full snapshots (snapshot.bin)
@@ -7,9 +7,9 @@ Minimal C++17 key-value store with:
 ## Build (no CMake needed)
 ```bash
 make
-./kvx
+./kv
 # or choose a data directory
-./kvx ./my_data_dir
+./kv ./my_data_dir
 ```
 
 ## Commands
