@@ -11,8 +11,7 @@ This is a learning-focused project — implemented step-by-step to understand mo
   4. **Engine** – coordinates MemTable, WAL, and SSTables.
   5. (Optional) Compaction, bloom filters, manifest file.
 
-## Current Status
-✅ **Day 1:** MemTable implemented and tested.
+**MemTable implemented and tested**
 Stores recent writes in memory, ordered by key, with tombstones for deletes.
 
 ## Build & Run
