@@ -1,4 +1,4 @@
-# KV-Store (Learning Project)
+# KV-Store
 
 A simple **Log-Structured Merge (LSM) Tree** style key–value store built from scratch in C++20.
 This is a learning-focused project — implemented step-by-step to understand modern storage engine internals.
