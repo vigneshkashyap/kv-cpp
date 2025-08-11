@@ -10,4 +10,13 @@ include_directories(${CMAKE_SOURCE_DIR}/include)
 add_executable(kv-store
     src/main.cpp
     src/memtable.cpp
+    src/wal.cpp
 )
+
+add_executable(kv-store-tests
+    tests/wal_tests.cpp
+    src/memtable.cpp
+    src/wal.cpp
+)
+target_include_directories(kv-store-tests PRIVATE ${CMAKE_SOURCE_DIR}/include)
+
