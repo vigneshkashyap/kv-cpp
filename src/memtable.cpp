@@ -34,3 +34,11 @@ void MemTable::clear() {
     kv_.clear();
     bytes_ = 0;
 }
+
+void MemTable::snapshot(std::vector<std::pair<std::string, MemValue>>& out) const {
+    out.clear();
+    out.reserve(kv_.size());
+    for (const auto& kv : kv_) {
+        out.emplace_back(kv.first, kv.second);
+    }
+}
