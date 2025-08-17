@@ -1,15 +1,16 @@
 #pragma once
 #include <cstdint>
 #include <string>
+
 #include "memtable.h"
 
 class WAL {
-public:
+   public:
     explicit WAL(std::string path);
     ~WAL();
 
     bool open();
-    bool appendPut(const std::string&key, const std::string& value);
+    bool appendPut(const std::string& key, const std::string& value);
     bool appendDel(const std::string& key);
 
     bool sync();
@@ -18,7 +19,7 @@ public:
 
     bool reset();
 
-private:
+   private:
     std::string path_;
     int fd_ = -1;
 

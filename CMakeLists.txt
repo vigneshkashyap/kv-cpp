@@ -6,28 +6,32 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 add_compile_options(-Wall -Wextra -Wpedantic -O2)
 
-# Core library: share MemTable/WAL/SSTable/Engine across all executables
+find_package(ZLIB REQUIRED)
+
 add_library(kv_store_core STATIC
     src/memtable.cpp
     src/wal.cpp
     src/sstable.cpp
     src/engine.cpp
+    src/utils.cpp
 )
 target_include_directories(kv_store_core PUBLIC ${CMAKE_SOURCE_DIR}/include)
 
-# Your original engine binary (keeps your src/main.cpp)
+target_link_libraries(kv_store_core PUBLIC ZLIB::ZLIB)
+
+# Main CLI tool
 add_executable(kv-store
     src/main.cpp
 )
 target_link_libraries(kv-store PRIVATE kv_store_core)
 
-# REPL (interactive shell)
+# REPL
 add_executable(kv-repl
     examples/kv_repl.cpp
 )
 target_link_libraries(kv-repl PRIVATE kv_store_core)
 
-# Tests (now link the core lib; don't re-list memtable/wal sources here)
+# Tests
 add_executable(kv-store-tests
     tests/wal_tests.cpp
 )

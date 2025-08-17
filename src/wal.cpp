@@ -1,13 +1,19 @@
 #include "wal.h"
+
 #include <fcntl.h>
-#include <unistd.h>
 #include <sys/stat.h>
-#include <filesystem>
-#include <vector>
+#include <unistd.h>
+#include <zlib.h>
+
 #include <cstring>
+#include <filesystem>
+#include <iostream>
+#include <vector>
+
+#include "utils.h"
 
 namespace {
-constexpr uint32_t kMagic = 0x4B56574C; // 'K''V''W''L' (KV WAL)
+constexpr uint32_t kMagic = 0x4B56574C;  // 'K''V''W''L' (KV WAL)
 constexpr uint32_t kVersion = 1;
 
 static bool writeU32(int fd, uint32_t v) {
@@ -22,11 +28,12 @@ static bool readU32(int fd, uint32_t& v) {
 static bool readU8(int fd, uint8_t& v) {
     return ::read(fd, &v, sizeof(v)) == (ssize_t)sizeof(v);
 }
-}
+}  // namespace
 
 WAL::WAL(std::string path) : path_(std::move(path)) {}
-WAL::~WAL() { if (fd_ >= 0) ::close(fd_); }
-
+WAL::~WAL() {
+    if (fd_ >= 0) ::close(fd_);
+}
 
 bool WAL::open() {
     std::filesystem::path p(path_);
@@ -43,7 +50,7 @@ bool WAL::validateHeader() {
     off_t end = ::lseek(fd_, 0, SEEK_END);
     if (end == 0) {
         if (::lseek(fd_, 0, SEEK_SET) < 0) return false;
-        if (!writeU32(fd_, kMagic))   return false;
+        if (!writeU32(fd_, kMagic)) return false;
         if (!writeU32(fd_, kVersion)) return false;
         return true;
     }
@@ -62,7 +69,8 @@ bool WAL::writeAll(int fd, const void* p, size_t n) {
     while (left) {
         ssize_t w = ::write(fd, c, left);
         if (w < 0) return false;
-        c += w; left -= w;
+        c += w;
+        left -= w;
     }
     return true;
 }
@@ -71,9 +79,10 @@ bool WAL::readAll(int fd, void* p, size_t n) {
     size_t left = n;
     while (left) {
         ssize_t r = ::read(fd, c, left);
-        if (r == 0) return false;        // EOF before we got everything
-        if (r < 0)  return false;
-        c += r; left -= r;
+        if (r == 0) return false;  // EOF before we got everything
+        if (r < 0) return false;
+        c += r;
+        left -= r;
     }
     return true;
 }
@@ -85,16 +94,29 @@ bool WAL::ensureOpenForWrite() {
 
 bool WAL::writeRecord(const std::string& key, RecType t, const std::string* val) {
     if (!ensureOpenForWrite()) return false;
-    uint32_t klen = (uint32_t)key.size();
-    uint32_t vlen = (t == RecType::Put && val) ? (uint32_t)val->size() : 0;
 
+    uint32_t klen = static_cast<uint32_t>(key.size());
+    uint32_t vlen = (t == RecType::Put && val) ? static_cast<uint32_t>(val->size()) : 0;
+
+    // Build a buffer to compute CRC32
+    std::string buf;
+    buf.append(reinterpret_cast<const char*>(&klen), sizeof(klen));
+    buf.append(key);
+    buf.push_back(static_cast<char>(t));
+    buf.append(reinterpret_cast<const char*>(&vlen), sizeof(vlen));
+    if (val && vlen) buf.append(*val);
+
+    uint32_t crc = compute_crc32(buf);
+
+    // Write the actual record
     if (!writeU32(fd_, klen)) return false;
     if (!writeAll(fd_, key.data(), klen)) return false;
     if (!writeU8(fd_, static_cast<uint8_t>(t))) return false;
     if (!writeU32(fd_, vlen)) return false;
     if (vlen && !writeAll(fd_, val->data(), vlen)) return false;
+    if (!writeU32(fd_, crc)) return false;
 
-    return true; // caller decides when to fsync
+    return true;
 }
 
 bool WAL::appendPut(const std::string& key, const std::string& value) {
@@ -124,38 +146,79 @@ bool WAL::replay(MemTable& mem) {
 
     // Read records until EOF or incomplete tail
     while (true) {
-        uint32_t klen = 0;
-        uint8_t  type = 0;
-        uint32_t vlen = 0;
+        uint32_t klen = 0, vlen = 0, crc_stored = 0;
+        uint8_t type = 0;
 
-        // Try to read klen; if EOF here, we're done gracefully.
+        // Read key length
         ssize_t got = ::read(rfd, &klen, sizeof(klen));
-        if (got == 0) break;            // clean EOF
-        if (got != (ssize_t)sizeof(klen)) { ::close(rfd); return true; } // treat as truncated tail
-
-        std::string key;
-        key.resize(klen);
-        if (!readAll(rfd, key.data(), klen)) { ::close(rfd); return true; }
-
-        if (!readU8(rfd, type)) { ::close(rfd); return true; }
-        if (!readU32(rfd, vlen)) { ::close(rfd); return true; }
-
-        if (type == (uint8_t)RecType::Put) {
-            std::string val;
-            val.resize(vlen);
-            if (!readAll(rfd, val.data(), vlen)) { ::close(rfd); return true; }
-            mem.put(std::move(key), std::move(val));
-        } else if (type == (uint8_t)RecType::Del) {
-            // DEL should have vlen=0; if not, skip vlen bytes defensively
-            if (vlen) {
-                std::vector<char> skip(vlen);
-                if (!readAll(rfd, skip.data(), vlen)) { ::close(rfd); return true; }
-            }
-            mem.del(std::move(key));
-        } else {
-            // Unknown type: stop (could enhance with skip)
+        if (got == 0) break;  // clean EOF
+        if (got != (ssize_t)sizeof(klen)) {
             ::close(rfd);
             return true;
+        }
+
+        std::string key(klen, '\0');
+        if (!readAll(rfd, key.data(), klen)) {
+            ::close(rfd);
+            return true;
+        }
+
+        if (!readU8(rfd, type)) {
+            ::close(rfd);
+            return true;
+        }
+        if (!readU32(rfd, vlen)) {
+            ::close(rfd);
+            return true;
+        }
+
+        std::string val;
+        if (type == (uint8_t)RecType::Put) {
+            val.resize(vlen);
+            if (!readAll(rfd, val.data(), vlen)) {
+                ::close(rfd);
+                return true;
+            }
+        } else if (vlen) {
+            std::vector<char> skip(vlen);
+            if (!readAll(rfd, skip.data(), vlen)) {
+                ::close(rfd);
+                return true;
+            }
+        }
+
+        // Read checksum
+        if (!readU32(rfd, crc_stored)) {
+            ::close(rfd);
+            return true;
+        }
+
+        // Build buffer for validation
+        std::string buf;
+        buf.append(reinterpret_cast<const char*>(&klen), sizeof(klen));
+        buf.append(key);
+        buf.push_back(type);
+        buf.append(reinterpret_cast<const char*>(&vlen), sizeof(vlen));
+        if (type == (uint8_t)RecType::Put) {
+            buf.append(val);
+        } else if (vlen) {
+            buf.append(std::string(vlen, '\0'));  // filler to preserve CRC format
+        }
+
+        uint32_t crc_expected = compute_crc32(buf);
+        if (crc_expected != crc_stored) {
+            std::cerr << "WAL: checksum mismatch. Skipping corrupt record.\n";
+            continue;
+        }
+
+        // Apply to MemTable
+        if (type == (uint8_t)RecType::Put) {
+            mem.put(std::move(key), std::move(val));
+        } else if (type == (uint8_t)RecType::Del) {
+            mem.del(std::move(key));
+        } else {
+            std::cerr << "WAL: unknown record type. Aborting replay.\n";
+            break;
         }
     }
 
@@ -174,6 +237,9 @@ bool WAL::reset() {
     }
     ::close(tfd);
     // Re-open append fd_ positioned at end
-    if (fd_ >= 0) { ::close(fd_); fd_ = -1; }
+    if (fd_ >= 0) {
+        ::close(fd_);
+        fd_ = -1;
+    }
     return open();
 }
